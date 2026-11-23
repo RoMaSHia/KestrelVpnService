@@ -22,7 +22,6 @@ import dev.kestrel.proxy.data.model.ThemeMode
 import dev.kestrel.proxy.data.model.TrafficStats
 import dev.kestrel.proxy.data.model.VpnStatus
 import dev.kestrel.proxy.data.repository.KestrelRepository
-import dev.kestrel.proxy.data.util.InstallLaunchOutcome
 import dev.kestrel.proxy.data.util.ProxyPinger
 import dev.kestrel.proxy.data.util.ProxyUriParser
 import dev.kestrel.proxy.data.util.RuleSerializer
@@ -40,7 +39,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 
 sealed interface UpdateUiState {
     data object Idle : UpdateUiState
@@ -51,13 +49,6 @@ sealed interface UpdateUiState {
         val downloadUrl: String,
         val releasePageUrl: String,
         val releaseNotes: String,
-    ) : UpdateUiState
-
-    data class Downloading(val latestVersion: String, val progress: Float) : UpdateUiState
-    data class ReadyToInstall(
-        val latestVersion: String,
-        val apkFile: File,
-        val needsPermission: Boolean,
     ) : UpdateUiState
 
     data class Error(
@@ -453,9 +444,7 @@ class KestrelViewModel(application: Application) : AndroidViewModel(application)
     // --- In-app Updates ---
 
     fun checkForUpdates() {
-        if (updateStateFlow.value is UpdateUiState.Checking ||
-            updateStateFlow.value is UpdateUiState.Downloading
-        ) {
+        if (updateStateFlow.value is UpdateUiState.Checking) {
             return
         }
         viewModelScope.launch {
@@ -479,57 +468,6 @@ class KestrelViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
             }
-        }
-    }
-
-    fun downloadAndInstallUpdate(latestVersion: String, downloadUrl: String) {
-        viewModelScope.launch {
-            updateStateFlow.value = UpdateUiState.Downloading(latestVersion, 0f)
-            val result = UpdateChecker.downloadApk(
-                context = getApplication(),
-                downloadUrl = downloadUrl,
-                onProgress = { progress ->
-                    updateStateFlow.value = UpdateUiState.Downloading(latestVersion, progress)
-                },
-            )
-            result.onSuccess { file ->
-                installApkFile(latestVersion, file)
-            }.onFailure { err ->
-                updateStateFlow.value = UpdateUiState.Error(
-                    message = err.message ?: "Не удалось скачать APK",
-                    releasesUrl = UpdateChecker.RELEASES_URL,
-                )
-            }
-        }
-    }
-
-    fun installApkFile(latestVersion: String, file: File) {
-        val ctx = getApplication<Application>()
-        when (UpdateChecker.launchInstaller(ctx, file)) {
-            InstallLaunchOutcome.LAUNCHED_INSTALLER -> {
-                updateStateFlow.value = UpdateUiState.ReadyToInstall(
-                    latestVersion = latestVersion,
-                    apkFile = file,
-                    needsPermission = false,
-                )
-            }
-            InstallLaunchOutcome.OPENED_PERMISSION_SETTINGS -> {
-                updateStateFlow.value = UpdateUiState.ReadyToInstall(
-                    latestVersion = latestVersion,
-                    apkFile = file,
-                    needsPermission = true,
-                )
-            }
-        }
-    }
-
-    fun retryPendingInstallIfPermitted() {
-        val current = updateStateFlow.value
-        if (current is UpdateUiState.ReadyToInstall &&
-            current.needsPermission &&
-            UpdateChecker.canInstallPackages(getApplication())
-        ) {
-            installApkFile(current.latestVersion, current.apkFile)
         }
     }
 

@@ -60,7 +60,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         viewModel.refreshBatteryStatus()
-        viewModel.retryPendingInstallIfPermitted()
     }
 
     private fun requestConnectWithPermissions() {

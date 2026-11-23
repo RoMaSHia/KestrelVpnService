@@ -100,7 +100,6 @@ import dev.kestrel.proxy.ui.components.formatBytes
 import dev.kestrel.proxy.ui.components.formatSpeed
 import dev.kestrel.proxy.ui.components.formatUptime
 import dev.kestrel.proxy.ui.theme.KestrelColors
-import java.io.File
 
 @Composable
 fun DashboardScreen(
@@ -119,8 +118,6 @@ fun DashboardScreen(
     onChangeDynamicColor: (Boolean) -> Unit,
     onToggleIpv6: (Boolean) -> Unit,
     onCheckForUpdates: () -> Unit,
-    onDownloadAndInstall: (String, String) -> Unit,
-    onInstallDownloadedApk: (String, File) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -376,8 +373,6 @@ fun DashboardScreen(
             onToggleIpv6 = onToggleIpv6,
             onSaveDns = onSaveDns,
             onCheckForUpdates = onCheckForUpdates,
-            onDownloadAndInstall = onDownloadAndInstall,
-            onInstallDownloadedApk = onInstallDownloadedApk,
             onDismiss = { showSettingsSheet = false },
         )
     }
@@ -921,8 +916,6 @@ private fun AppearanceAndDnsSheet(
     onToggleIpv6: (Boolean) -> Unit,
     onSaveDns: (String, String, Boolean) -> Unit,
     onCheckForUpdates: () -> Unit,
-    onDownloadAndInstall: (String, String) -> Unit,
-    onInstallDownloadedApk: (String, File) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1110,8 +1103,6 @@ private fun AppearanceAndDnsSheet(
             UpdateSection(
                 updateState = uiState.updateState,
                 onCheckForUpdates = onCheckForUpdates,
-                onDownloadAndInstall = onDownloadAndInstall,
-                onInstallDownloadedApk = onInstallDownloadedApk,
             )
         }
     }
@@ -1121,8 +1112,6 @@ private fun AppearanceAndDnsSheet(
 private fun UpdateSection(
     updateState: UpdateUiState,
     onCheckForUpdates: () -> Unit,
-    onDownloadAndInstall: (String, String) -> Unit,
-    onInstallDownloadedApk: (String, File) -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -1195,52 +1184,42 @@ private fun UpdateSection(
                             fontWeight = FontWeight.SemiBold,
                         )
                         Text(
-                            text = "Установится поверх текущей версии без удаления профилей и правил.",
+                            text = "APK загрузится через браузер и установится поверх текущей версии без удаления профилей и правил.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Button(
                             onClick = {
-                                onDownloadAndInstall(updateState.latestVersion, updateState.downloadUrl)
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(updateState.downloadUrl)),
+                                    )
+                                }
                             },
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
                         ) {
-                            Text("Скачать и установить v${updateState.latestVersion}")
+                            Text("Скачать APK v${updateState.latestVersion}")
+                        }
+                        if (updateState.releasePageUrl.isNotBlank()) {
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(
+                                                Intent.ACTION_VIEW,
+                                                Uri.parse(updateState.releasePageUrl),
+                                            ),
+                                        )
+                                    }
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                            ) {
+                                Text("Страница релиза на GitHub")
+                            }
                         }
                     }
-                }
-            }
-
-            is UpdateUiState.Downloading -> {
-                Text(
-                    text = "Загрузка v${updateState.latestVersion}: ${(updateState.progress * 100).toInt()}%",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                LinearProgressIndicator(
-                    progress = { updateState.progress },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-
-            is UpdateUiState.ReadyToInstall -> {
-                Text(
-                    text = if (updateState.needsPermission) {
-                        "Разрешите установку обновлений для Kestrel в настройках — затем нажмите кнопку ниже."
-                    } else {
-                        "APK v${updateState.latestVersion} скачан и готов к установке поверх текущей версии."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Button(
-                    onClick = {
-                        onInstallDownloadedApk(updateState.latestVersion, updateState.apkFile)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Text("Установить обновление v${updateState.latestVersion}")
                 }
             }
 
