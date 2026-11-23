@@ -3,10 +3,11 @@ package dev.kestrel.proxy.ui.screens
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,6 +29,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -51,6 +54,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -82,6 +86,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
@@ -122,6 +127,7 @@ fun RoutesScreen(
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
+    val haptic = LocalHapticFeedback.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -183,9 +189,21 @@ fun RoutesScreen(
     Scaffold(
         modifier = modifier,
         containerColor = MaterialTheme.colorScheme.background,
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            if (selectedSubTab == 1) {
+            if (selectedSubTab == 0 && uiState.hasPendingAppChanges) {
+                ExtendedFloatingActionButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onApplyAppChanges()
+                    },
+                    icon = { Icon(Icons.Rounded.Refresh, contentDescription = null) },
+                    text = { Text("Применить изменения") },
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                )
+            } else if (selectedSubTab == 1) {
                 FloatingActionButton(
                     onClick = {
                         editingRule = null
@@ -206,7 +224,7 @@ fun RoutesScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 20.dp, end = 8.dp, top = 12.dp, bottom = 4.dp),
+                    .padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 0.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -312,7 +330,6 @@ fun RoutesScreen(
                     onSetAppMode = onSetAppMode,
                     onTogglePackage = onTogglePackage,
                     onClearSelected = onClearSelectedPackages,
-                    onApplyChanges = onApplyAppChanges,
                 )
             } else {
                 RulesRoutingTab(
@@ -346,14 +363,13 @@ fun RoutesScreen(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AppsRoutingTab(
     uiState: KestrelUiState,
     onSetAppMode: (AppRoutingMode) -> Unit,
     onTogglePackage: (String) -> Unit,
     onClearSelected: () -> Unit,
-    onApplyChanges: () -> Unit,
 ) {
     val haptic = LocalHapticFeedback.current
     var query by rememberSaveable { mutableStateOf("") }
@@ -362,6 +378,7 @@ private fun AppsRoutingTab(
 
     val selectedPackages = uiState.settings.selectedPackages
     val mode = uiState.settings.appRoutingMode
+    val selectionEnabled = mode != AppRoutingMode.ALL
 
     val filteredApps = remember(
         uiState.installedApps,
@@ -387,212 +404,260 @@ private fun AppsRoutingTab(
             .toList()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+    if (uiState.isLoadingApps) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
+        ) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(
+            start = 16.dp,
+            end = 16.dp,
+            top = 10.dp,
+            bottom = 88.dp,
+        ),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // 3-way SegmentedButtonRow
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            val modes = listOf(
-                AppRoutingMode.ALL to "Все",
-                AppRoutingMode.ONLY_SELECTED to "Только выбранные",
-                AppRoutingMode.BYPASS_SELECTED to "Обходить выбранные",
-            )
-            modes.forEachIndexed { index, (itemMode, label) ->
-                SegmentedButton(
-                    selected = mode == itemMode,
-                    onClick = {
-                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                        onSetAppMode(itemMode)
+        item(key = "mode_and_hint") {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    val modes = listOf(
+                        AppRoutingMode.ALL to "Все",
+                        AppRoutingMode.ONLY_SELECTED to "Только выбранные",
+                        AppRoutingMode.BYPASS_SELECTED to "Обходить выбранные",
+                    )
+                    modes.forEachIndexed { index, (itemMode, label) ->
+                        SegmentedButton(
+                            selected = mode == itemMode,
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onSetAppMode(itemMode)
+                            },
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
+                            icon = {},
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelSmall,
+                                textAlign = TextAlign.Center,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+
+                AnimatedContent(
+                    targetState = mode,
+                    label = "appModeHintBanner",
+                ) { currentMode ->
+                    val dark = isSystemInDarkTheme()
+                    val (bg, fg, hintText) = when (currentMode) {
+                        AppRoutingMode.ALL -> Triple(
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                            MaterialTheme.colorScheme.onPrimaryContainer,
+                            "Весь трафик всех приложений проходит через VPN и правила ядра.",
+                        )
+                        AppRoutingMode.ONLY_SELECTED -> Triple(
+                            if (dark) KestrelColors.DirectGreenContainerDark else KestrelColors.DirectGreenContainerLight,
+                            if (dark) KestrelColors.DirectGreenOnDark else KestrelColors.DirectGreen,
+                            "Через прокси идут ТОЛЬКО отмеченные ниже приложения — остальные напрямую.",
+                        )
+                        AppRoutingMode.BYPASS_SELECTED -> Triple(
+                            MaterialTheme.colorScheme.secondaryContainer,
+                            MaterialTheme.colorScheme.onSecondaryContainer,
+                            "Через прокси идёт всё, КРОМЕ отмеченных приложений (удобно для банков и госуслуг).",
+                        )
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = bg,
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Info,
+                                contentDescription = null,
+                                tint = fg,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Text(
+                                text = hintText,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = fg,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item(key = "filter_chips") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                FilterChip(
+                    selected = selectedOnTop,
+                    onClick = { selectedOnTop = !selectedOnTop },
+                    label = { Text("Выбранные сверху") },
+                    leadingIcon = if (selectedOnTop) {
+                        { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                    } else {
+                        null
                     },
-                    shape = SegmentedButtonDefaults.itemShape(index = index, count = modes.size),
-                    icon = {},
+                )
+                FilterChip(
+                    selected = showSystemApps,
+                    onClick = { showSystemApps = !showSystemApps },
+                    label = { Text("Системные") },
+                    leadingIcon = if (showSystemApps) {
+                        { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                    } else {
+                        null
+                    },
+                )
+                if (selectedPackages.isNotEmpty()) {
+                    TextButton(onClick = onClearSelected) {
+                        Text("Сбросить (${selectedPackages.size})")
+                    }
+                }
+            }
+        }
+
+        stickyHeader(key = "search_bar") {
+            Surface(
+                color = MaterialTheme.colorScheme.background,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                CompactAppSearchBar(
+                    query = query,
+                    onQueryChange = { query = it },
+                    resultCount = filteredApps.size,
+                    modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
+                )
+            }
+        }
+
+        if (filteredApps.isEmpty()) {
+            item(key = "empty_apps") {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 40.dp),
+                    contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = label,
-                        style = MaterialTheme.typography.labelSmall,
-                        textAlign = TextAlign.Center,
-                        maxLines = 2,
+                        text = "Ничего не найдено по запросу «$query»",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        } else {
+            items(filteredApps, key = { it.packageName }) { app ->
+                val isChecked = selectedPackages.contains(app.packageName)
+                AppRowItem(
+                    app = app,
+                    checked = isChecked,
+                    enabled = selectionEnabled,
+                    onToggle = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onTogglePackage(app.packageName)
+                    },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactAppSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    resultCount: Int,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(44.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp),
+            )
+            Box(
+                modifier = Modifier.weight(1f),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                if (query.isEmpty()) {
+                    Text(
+                        text = "Поиск приложения или пакета…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-            }
-        }
-
-        // Dynamic colored mode hint banner
-        AnimatedContent(
-            targetState = mode,
-            label = "appModeHintBanner",
-        ) { currentMode ->
-            val dark = isSystemInDarkTheme()
-            val (bg, fg, hintText) = when (currentMode) {
-                AppRoutingMode.ALL -> Triple(
-                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
-                    MaterialTheme.colorScheme.onPrimaryContainer,
-                    "Весь трафик всех приложений на устройстве проходит через VPN и правила Rust-ядра.",
-                )
-                AppRoutingMode.ONLY_SELECTED -> Triple(
-                    if (dark) KestrelColors.DirectGreenContainerDark else KestrelColors.DirectGreenContainerLight,
-                    if (dark) KestrelColors.DirectGreenOnDark else KestrelColors.DirectGreen,
-                    "Через прокси работают ТОЛЬКО отмеченные ниже приложения — все остальные выходят напрямую.",
-                )
-                AppRoutingMode.BYPASS_SELECTED -> Triple(
-                    MaterialTheme.colorScheme.secondaryContainer,
-                    MaterialTheme.colorScheme.onSecondaryContainer,
-                    "Весь трафик идёт через прокси, кроме отмеченных приложений — удобно для банков и госуслуг.",
+                BasicTextField(
+                    value = query,
+                    onValueChange = onQueryChange,
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.bodyMedium.copy(
+                        color = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                    modifier = Modifier.fillMaxWidth(),
                 )
             }
-
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = bg,
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+            if (query.isNotEmpty()) {
+                IconButton(
+                    onClick = { onQueryChange("") },
+                    modifier = Modifier.size(28.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.Rounded.Info,
-                        contentDescription = null,
-                        tint = fg,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Text(
-                        text = hintText,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = fg,
+                        imageVector = Icons.Rounded.Clear,
+                        contentDescription = "Очистить",
+                        modifier = Modifier.size(16.dp),
                     )
                 }
-            }
-        }
-
-        // Apply Changes banner when VPN is running and app settings changed
-        AnimatedVisibility(visible = uiState.hasPendingAppChanges) {
-            Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.tertiaryContainer,
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+            } else {
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Список приложений изменён",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer,
-                        )
-                        Text(
-                            text = "Перезапустите туннель, чтобы новые правила ОС вступили в силу.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer,
-                        )
-                    }
-                    Button(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onApplyChanges()
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Refresh,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Применить")
-                    }
-                }
-            }
-        }
-
-        // Search input
-        OutlinedTextField(
-            value = query,
-            onValueChange = { query = it },
-            placeholder = { Text("Поиск приложения или packageName…") },
-            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-            trailingIcon = {
-                if (query.isNotEmpty()) {
-                    IconButton(onClick = { query = "" }) {
-                        Icon(Icons.Rounded.Clear, contentDescription = "Очистить")
-                    }
-                }
-            },
-            singleLine = true,
-            shape = RoundedCornerShape(14.dp),
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        // Filter chips + counter + clear
-        FlowRow(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            FilterChip(
-                selected = selectedOnTop,
-                onClick = { selectedOnTop = !selectedOnTop },
-                label = { Text("Выбранные сверху") },
-                leadingIcon = if (selectedOnTop) {
-                    { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                } else {
-                    null
-                },
-            )
-            FilterChip(
-                selected = showSystemApps,
-                onClick = { showSystemApps = !showSystemApps },
-                label = { Text("Системные") },
-                leadingIcon = if (showSystemApps) {
-                    { Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                } else {
-                    null
-                },
-            )
-            if (selectedPackages.isNotEmpty()) {
-                TextButton(onClick = onClearSelected) {
-                    Text("Сбросить (${selectedPackages.size})")
-                }
-            }
-        }
-
-        // Apps list
-        if (uiState.isLoadingApps) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator()
-            }
-        } else {
-            val selectionEnabled = mode != AppRoutingMode.ALL
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                contentPadding = PaddingValues(bottom = 16.dp),
-            ) {
-                items(filteredApps, key = { it.packageName }) { app ->
-                    val isChecked = selectedPackages.contains(app.packageName)
-                    AppRowItem(
-                        app = app,
-                        checked = isChecked,
-                        enabled = selectionEnabled,
-                        onToggle = {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onTogglePackage(app.packageName)
-                        },
+                    Text(
+                        text = resultCount.toString(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
                     )
                 }
             }
@@ -607,13 +672,17 @@ private fun AppRowItem(
     enabled: Boolean,
     onToggle: () -> Unit,
 ) {
+    val bgColor = when {
+        checked && enabled -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f)
+        else -> MaterialTheme.colorScheme.surfaceContainer
+    }
     Surface(
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(16.dp),
+        color = bgColor,
         modifier = Modifier
             .fillMaxWidth()
             .alpha(if (enabled) 1f else 0.58f)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(16.dp))
             .clickable(enabled = enabled, onClick = onToggle),
     ) {
         Row(
@@ -628,13 +697,13 @@ private fun AppRowItem(
                     bitmap = app.icon,
                     contentDescription = null,
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(42.dp)
                         .clip(RoundedCornerShape(10.dp)),
                 )
             } else {
                 Box(
                     modifier = Modifier
-                        .size(38.dp)
+                        .size(42.dp)
                         .clip(RoundedCornerShape(10.dp))
                         .background(MaterialTheme.colorScheme.surfaceContainerHigh),
                     contentAlignment = Alignment.Center,

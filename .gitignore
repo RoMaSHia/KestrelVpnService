@@ -17,3 +17,5 @@ app/src/main/jniLibs/
 # Signing keys
 *.jks
 *.keystore
+*.p12
+keystore.properties

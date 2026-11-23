@@ -111,8 +111,9 @@ cargo test --manifest-path rust-core/Cargo.toml
 
 ---
 
-## CI/CD на GitHub Actions
+## CI/CD на GitHub Actions и бесшовные обновления
 
 В репозитории настроен workflow [.github/workflows/build-apk.yml](.github/workflows/build-apk.yml):
 - При каждом `push` / `pull_request` прогоняются тесты Rust + Kotlin, собираются Debug и Release APK и сохраняются как **Artifacts**.
 - При пуше тега вида `v1.0.0` автоматически создаётся **GitHub Release** с прикреплёнными APK-файлами.
+- **Бесшовные обновления (поверх установленного APK):** приложение проверяет новые релизы прямо в настройках (*шестерёнка → Обновления*) и запускает системное обновление без удаления. Чтобы локальные сборки и релизы GitHub Actions подписывались одним и тем же сертификатом, задайте в `Settings → Secrets and variables → Actions` секреты `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS` и `KEY_PASSWORD`.

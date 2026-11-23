@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -23,24 +25,38 @@ android {
         applicationId = "dev.kestrel.proxy"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.2.1"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
         }
     }
 
+    val keystorePropsFile = rootProject.file("keystore.properties")
+    val keystoreProps = Properties()
+    if (keystorePropsFile.exists()) {
+        keystorePropsFile.inputStream().use { keystoreProps.load(it) }
+    }
+
     val releaseKeystorePath = System.getenv("KEYSTORE_PATH")
+        ?.takeIf { it.isNotBlank() }
+        ?: keystoreProps.getProperty("storeFile")
     val hasCustomKeystore = !releaseKeystorePath.isNullOrBlank() && file(releaseKeystorePath).exists()
 
     signingConfigs {
         create("release") {
             if (hasCustomKeystore) {
                 storeFile = file(releaseKeystorePath)
-                storePassword = System.getenv("KEYSTORE_PASSWORD").orEmpty()
-                keyAlias = System.getenv("KEY_ALIAS").orEmpty()
-                keyPassword = System.getenv("KEY_PASSWORD").orEmpty()
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: keystoreProps.getProperty("storePassword").orEmpty()
+                keyAlias = System.getenv("KEY_ALIAS")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: keystoreProps.getProperty("keyAlias").orEmpty()
+                keyPassword = System.getenv("KEY_PASSWORD")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: keystoreProps.getProperty("keyPassword").orEmpty()
             }
         }
     }
@@ -75,6 +91,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {

@@ -10,7 +10,9 @@ import dev.kestrel.proxy.data.model.RuleMatchType
 import dev.kestrel.proxy.data.model.encodeCoreConfigJson
 import dev.kestrel.proxy.data.util.ProxyUriParser
 import dev.kestrel.proxy.data.util.RuleSerializer
+import dev.kestrel.proxy.data.util.UpdateChecker
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -110,5 +112,13 @@ class KestrelUnitTest {
         assertTrue(encoded.contains(""""default_action":"PROXY""""))
         assertTrue(encoded.contains(""""bypass_lan":true"""))
         assertTrue(encoded.contains(""""match_type":"domain_suffix""""))
+    }
+
+    @Test
+    fun updateCheckerComparesSemanticVersionsAccurately() {
+        assertTrue(UpdateChecker.isNewerVersion("v0.2.2", "0.2.1"))
+        assertTrue(UpdateChecker.isNewerVersion("1.0.0", "0.9.9"))
+        assertFalse(UpdateChecker.isNewerVersion("v0.2.1", "0.2.1"))
+        assertFalse(UpdateChecker.isNewerVersion("0.2.0", "0.2.1"))
     }
 }

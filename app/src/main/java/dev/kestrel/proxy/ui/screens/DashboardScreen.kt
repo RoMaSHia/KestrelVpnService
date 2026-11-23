@@ -58,6 +58,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -87,16 +88,19 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import dev.kestrel.proxy.BuildConfig
 import dev.kestrel.proxy.data.model.AppRoutingMode
 import dev.kestrel.proxy.data.model.ProxyProfile
 import dev.kestrel.proxy.data.model.ThemeMode
 import dev.kestrel.proxy.data.model.VpnStatus
 import dev.kestrel.proxy.ui.KestrelUiState
+import dev.kestrel.proxy.ui.UpdateUiState
 import dev.kestrel.proxy.ui.components.RoutingHelpBottomSheet
 import dev.kestrel.proxy.ui.components.formatBytes
 import dev.kestrel.proxy.ui.components.formatSpeed
 import dev.kestrel.proxy.ui.components.formatUptime
 import dev.kestrel.proxy.ui.theme.KestrelColors
+import java.io.File
 
 @Composable
 fun DashboardScreen(
@@ -114,6 +118,9 @@ fun DashboardScreen(
     onChangeTheme: (ThemeMode) -> Unit,
     onChangeDynamicColor: (Boolean) -> Unit,
     onToggleIpv6: (Boolean) -> Unit,
+    onCheckForUpdates: () -> Unit,
+    onDownloadAndInstall: (String, String) -> Unit,
+    onInstallDownloadedApk: (String, File) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -368,6 +375,9 @@ fun DashboardScreen(
             onChangeDynamicColor = onChangeDynamicColor,
             onToggleIpv6 = onToggleIpv6,
             onSaveDns = onSaveDns,
+            onCheckForUpdates = onCheckForUpdates,
+            onDownloadAndInstall = onDownloadAndInstall,
+            onInstallDownloadedApk = onInstallDownloadedApk,
             onDismiss = { showSettingsSheet = false },
         )
     }
@@ -910,6 +920,9 @@ private fun AppearanceAndDnsSheet(
     onChangeDynamicColor: (Boolean) -> Unit,
     onToggleIpv6: (Boolean) -> Unit,
     onSaveDns: (String, String, Boolean) -> Unit,
+    onCheckForUpdates: () -> Unit,
+    onDownloadAndInstall: (String, String) -> Unit,
+    onInstallDownloadedApk: (String, File) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -1089,6 +1102,178 @@ private fun AppearanceAndDnsSheet(
                     Text("Оптимизация батареи уже отключена")
                 } else {
                     Text("Отключить оптимизацию батареи")
+                }
+            }
+
+            HorizontalDivider()
+
+            UpdateSection(
+                updateState = uiState.updateState,
+                onCheckForUpdates = onCheckForUpdates,
+                onDownloadAndInstall = onDownloadAndInstall,
+                onInstallDownloadedApk = onInstallDownloadedApk,
+            )
+        }
+    }
+}
+
+@Composable
+private fun UpdateSection(
+    updateState: UpdateUiState,
+    onCheckForUpdates: () -> Unit,
+    onDownloadAndInstall: (String, String) -> Unit,
+    onInstallDownloadedApk: (String, File) -> Unit,
+) {
+    val context = LocalContext.current
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Обновления приложения",
+                style = MaterialTheme.typography.titleSmall,
+            )
+            Text(
+                text = "v${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.labelMedium.copy(fontFamily = FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        when (updateState) {
+            UpdateUiState.Idle -> {
+                OutlinedButton(
+                    onClick = onCheckForUpdates,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text("Проверить обновления на GitHub")
+                }
+            }
+
+            UpdateUiState.Checking -> {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text(
+                    text = "Проверка последнего релиза…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            is UpdateUiState.UpToDate -> {
+                Text(
+                    text = "Установлена актуальная версия v${updateState.currentVersion}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                OutlinedButton(
+                    onClick = onCheckForUpdates,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text("Проверить ещё раз")
+                }
+            }
+
+            is UpdateUiState.Available -> {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "Доступно обновление: v${updateState.latestVersion}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = "Установится поверх текущей версии без удаления профилей и правил.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Button(
+                            onClick = {
+                                onDownloadAndInstall(updateState.latestVersion, updateState.downloadUrl)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text("Скачать и установить v${updateState.latestVersion}")
+                        }
+                    }
+                }
+            }
+
+            is UpdateUiState.Downloading -> {
+                Text(
+                    text = "Загрузка v${updateState.latestVersion}: ${(updateState.progress * 100).toInt()}%",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                LinearProgressIndicator(
+                    progress = { updateState.progress },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            is UpdateUiState.ReadyToInstall -> {
+                Text(
+                    text = if (updateState.needsPermission) {
+                        "Разрешите установку обновлений для Kestrel в настройках — затем нажмите кнопку ниже."
+                    } else {
+                        "APK v${updateState.latestVersion} скачан и готов к установке поверх текущей версии."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(
+                    onClick = {
+                        onInstallDownloadedApk(updateState.latestVersion, updateState.apkFile)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                ) {
+                    Text("Установить обновление v${updateState.latestVersion}")
+                }
+            }
+
+            is UpdateUiState.Error -> {
+                Text(
+                    text = updateState.message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(
+                        onClick = onCheckForUpdates,
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text("Повторить")
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(updateState.releasesUrl)),
+                                )
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text("Открыть GitHub")
+                    }
                 }
             }
         }

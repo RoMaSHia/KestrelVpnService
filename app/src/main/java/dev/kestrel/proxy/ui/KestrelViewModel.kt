@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.kestrel.proxy.BuildConfig
 import dev.kestrel.proxy.data.model.AppRoutingMode
 import dev.kestrel.proxy.data.model.AppSettings
 import dev.kestrel.proxy.data.model.ConnectionLogEntry
@@ -21,9 +22,12 @@ import dev.kestrel.proxy.data.model.ThemeMode
 import dev.kestrel.proxy.data.model.TrafficStats
 import dev.kestrel.proxy.data.model.VpnStatus
 import dev.kestrel.proxy.data.repository.KestrelRepository
+import dev.kestrel.proxy.data.util.InstallLaunchOutcome
 import dev.kestrel.proxy.data.util.ProxyPinger
 import dev.kestrel.proxy.data.util.ProxyUriParser
 import dev.kestrel.proxy.data.util.RuleSerializer
+import dev.kestrel.proxy.data.util.UpdateCheckResult
+import dev.kestrel.proxy.data.util.UpdateChecker
 import dev.kestrel.proxy.service.KestrelVpnService
 import dev.kestrel.proxy.service.VpnStateHolder
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +40,31 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+
+sealed interface UpdateUiState {
+    data object Idle : UpdateUiState
+    data object Checking : UpdateUiState
+    data class UpToDate(val currentVersion: String) : UpdateUiState
+    data class Available(
+        val latestVersion: String,
+        val downloadUrl: String,
+        val releasePageUrl: String,
+        val releaseNotes: String,
+    ) : UpdateUiState
+
+    data class Downloading(val latestVersion: String, val progress: Float) : UpdateUiState
+    data class ReadyToInstall(
+        val latestVersion: String,
+        val apkFile: File,
+        val needsPermission: Boolean,
+    ) : UpdateUiState
+
+    data class Error(
+        val message: String,
+        val releasesUrl: String = UpdateChecker.RELEASES_URL,
+    ) : UpdateUiState
+}
 
 data class KestrelUiState(
     val profiles: List<ProxyProfile> = emptyList(),
@@ -51,6 +80,7 @@ data class KestrelUiState(
     val hasPendingAppChanges: Boolean = false,
     val isPinging: Boolean = false,
     val isBatteryOptimizationIgnored: Boolean = true,
+    val updateState: UpdateUiState = UpdateUiState.Idle,
 ) {
     val activeProfile: ProxyProfile?
         get() = profiles.firstOrNull { it.id == settings.activeProfileId }
@@ -63,6 +93,7 @@ class KestrelViewModel(application: Application) : AndroidViewModel(application)
     private val isLoadingAppsFlow = MutableStateFlow(true)
     private val isPingingFlow = MutableStateFlow(false)
     private val batteryIgnoredFlow = MutableStateFlow(checkBatteryIgnored())
+    private val updateStateFlow = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
 
     private data class CoreConfigFingerprint(
         val activeProfileId: String?,
@@ -111,7 +142,8 @@ class KestrelViewModel(application: Application) : AndroidViewModel(application)
         vpnCombined,
         appApplyCombined,
         batteryIgnoredFlow,
-    ) { (profiles, rules, settings), vpn, meta, batteryIgnored ->
+        updateStateFlow,
+    ) { (profiles, rules, settings), vpn, meta, batteryIgnored, updateState ->
         val pendingAppChanges = vpn.status == VpnStatus.CONNECTED &&
             (settings.appRoutingMode != meta.appliedMode || settings.selectedPackages != meta.appliedPkgs)
 
@@ -129,6 +161,7 @@ class KestrelViewModel(application: Application) : AndroidViewModel(application)
             hasPendingAppChanges = pendingAppChanges,
             isPinging = meta.isPinging,
             isBatteryOptimizationIgnored = batteryIgnored,
+            updateState = updateState,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -414,6 +447,89 @@ class KestrelViewModel(application: Application) : AndroidViewModel(application)
             if (VpnStateHolder.status.value == VpnStatus.CONNECTED) {
                 KestrelVpnService.restart(getApplication())
             }
+        }
+    }
+
+    // --- In-app Updates ---
+
+    fun checkForUpdates() {
+        if (updateStateFlow.value is UpdateUiState.Checking ||
+            updateStateFlow.value is UpdateUiState.Downloading
+        ) {
+            return
+        }
+        viewModelScope.launch {
+            updateStateFlow.value = UpdateUiState.Checking
+            when (val res = UpdateChecker.checkLatestRelease(BuildConfig.VERSION_NAME)) {
+                is UpdateCheckResult.UpToDate -> {
+                    updateStateFlow.value = UpdateUiState.UpToDate(res.currentVersion)
+                }
+                is UpdateCheckResult.UpdateAvailable -> {
+                    updateStateFlow.value = UpdateUiState.Available(
+                        latestVersion = res.latestVersion,
+                        downloadUrl = res.downloadUrl,
+                        releasePageUrl = res.releasePageUrl,
+                        releaseNotes = res.releaseNotes,
+                    )
+                }
+                is UpdateCheckResult.Unavailable -> {
+                    updateStateFlow.value = UpdateUiState.Error(
+                        message = res.message,
+                        releasesUrl = res.releasesUrl,
+                    )
+                }
+            }
+        }
+    }
+
+    fun downloadAndInstallUpdate(latestVersion: String, downloadUrl: String) {
+        viewModelScope.launch {
+            updateStateFlow.value = UpdateUiState.Downloading(latestVersion, 0f)
+            val result = UpdateChecker.downloadApk(
+                context = getApplication(),
+                downloadUrl = downloadUrl,
+                onProgress = { progress ->
+                    updateStateFlow.value = UpdateUiState.Downloading(latestVersion, progress)
+                },
+            )
+            result.onSuccess { file ->
+                installApkFile(latestVersion, file)
+            }.onFailure { err ->
+                updateStateFlow.value = UpdateUiState.Error(
+                    message = err.message ?: "Не удалось скачать APK",
+                    releasesUrl = UpdateChecker.RELEASES_URL,
+                )
+            }
+        }
+    }
+
+    fun installApkFile(latestVersion: String, file: File) {
+        val ctx = getApplication<Application>()
+        when (UpdateChecker.launchInstaller(ctx, file)) {
+            InstallLaunchOutcome.LAUNCHED_INSTALLER -> {
+                updateStateFlow.value = UpdateUiState.ReadyToInstall(
+                    latestVersion = latestVersion,
+                    apkFile = file,
+                    needsPermission = false,
+                )
+            }
+            InstallLaunchOutcome.OPENED_PERMISSION_SETTINGS -> {
+                updateStateFlow.value = UpdateUiState.ReadyToInstall(
+                    latestVersion = latestVersion,
+                    apkFile = file,
+                    needsPermission = true,
+                )
+            }
+        }
+    }
+
+    fun retryPendingInstallIfPermitted() {
+        val current = updateStateFlow.value
+        if (current is UpdateUiState.ReadyToInstall &&
+            current.needsPermission &&
+            UpdateChecker.canInstallPackages(getApplication())
+        ) {
+            installApkFile(current.latestVersion, current.apkFile)
         }
     }
 

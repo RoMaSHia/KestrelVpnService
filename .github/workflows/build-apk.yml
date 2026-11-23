@@ -53,6 +53,12 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Cache fallback CI signing keystore for in-place updates
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: kestrel-ci-fallback-keystore-v1
+
       - name: Decode optional release keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
