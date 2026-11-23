@@ -125,8 +125,12 @@ class KestrelVpnService : VpnService(), SocketProtector {
             .setMtu(settings.mtu.coerceIn(1280, 1500))
             .addAddress("10.10.0.2", 24)
             .addRoute("0.0.0.0", 0)
-            .addAddress("fd00:10::2", 64)
-            .addRoute("::", 0)
+
+        if (settings.enableIpv6) {
+            builder
+                .addAddress("fd00:10::2", 64)
+                .addRoute("::", 0)
+        }
 
         val dnsIp = (if (settings.useCustomDns) settings.dnsUpstream else "8.8.8.8")
             .trim()

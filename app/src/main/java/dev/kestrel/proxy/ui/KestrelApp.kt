@@ -111,6 +111,7 @@ fun KestrelApp(
                         onSaveDns = viewModel::setDnsServers,
                         onChangeTheme = viewModel::setThemeMode,
                         onChangeDynamicColor = viewModel::setDynamicColor,
+                        onToggleIpv6 = viewModel::setEnableIpv6,
                     )
                 }
                 composable(TopTab.PROXIES.route) {

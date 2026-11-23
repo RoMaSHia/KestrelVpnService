@@ -24,8 +24,8 @@ use crate::router::Router;
 use crate::sniff::sniff_domain;
 use crate::stats::Telemetry;
 
-const TCP_BUFFER_SIZE: usize = 64 * 1024;
-const SNIFF_WAIT_MS: u64 = 150;
+const TCP_BUFFER_SIZE: usize = 128 * 1024;
+const SNIFF_WAIT_MS: u64 = 250;
 const UDP_SESSION_IDLE: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -487,11 +487,37 @@ fn handle_incoming_tun_packet(
     match parsed.proto {
         TransportProto::Tcp => {
             let is_syn_only = (parsed.tcp_flags & 0x02) != 0 && (parsed.tcp_flags & 0x10) == 0;
+            if is_syn_only {
+                if let Some(existing) = tcp_sessions.get(&tuple) {
+                    let existing_state = sockets.get::<TcpSocket>(existing.handle).state();
+                    if matches!(
+                        existing_state,
+                        TcpState::Closed
+                            | TcpState::TimeWait
+                            | TcpState::Closing
+                            | TcpState::LastAck
+                    ) {
+                        if let Some(stale) = tcp_sessions.remove(&tuple) {
+                            sockets.remove(stale.handle);
+                        }
+                    }
+                }
+            }
+
             if is_syn_only && !tcp_sessions.contains_key(&tuple) {
+                if !device.rx_queue.is_empty() {
+                    let now_smol =
+                        SmolInstant::from_millis(start_instant.elapsed().as_millis() as i64);
+                    iface.poll(now_smol, device, sockets);
+                }
+
                 let rx_buf = TcpSocketBuffer::new(vec![0u8; TCP_BUFFER_SIZE]);
                 let tx_buf = TcpSocketBuffer::new(vec![0u8; TCP_BUFFER_SIZE]);
                 let mut sock = TcpSocket::new(rx_buf, tx_buf);
                 sock.set_ack_delay(None);
+                sock.set_nagle_enabled(false);
+                sock.set_keep_alive(Some(smoltcp::time::Duration::from_secs(30)));
+                sock.set_timeout(Some(smoltcp::time::Duration::from_secs(120)));
 
                 let endpoint = IpListenEndpoint {
                     addr: Some(to_smol_ip(tuple.dst.ip())),
@@ -499,6 +525,16 @@ fn handle_incoming_tun_packet(
                 };
                 if sock.listen(endpoint).is_ok() {
                     let handle = sockets.add(sock);
+                    device.rx_queue.push_back(pkt);
+                    let now_smol =
+                        SmolInstant::from_millis(start_instant.elapsed().as_millis() as i64);
+                    iface.poll(now_smol, device, sockets);
+
+                    if sockets.get::<TcpSocket>(handle).state() == TcpState::Listen {
+                        sockets.remove(handle);
+                        return;
+                    }
+
                     let (to_proxy_tx, from_tun_rx) = mpsc::channel::<Vec<u8>>(32);
                     let (to_tun_tx, from_proxy_rx) = mpsc::channel::<ProxyToTun>(32);
 
@@ -513,12 +549,6 @@ fn handle_incoming_tun_packet(
                             last_activity: Instant::now(),
                         },
                     );
-
-                    // Feed SYN and immediately poll smoltcp so the new listening socket binds exclusively to this 4-tuple
-                    device.rx_queue.push_back(pkt);
-                    let now_smol =
-                        SmolInstant::from_millis(start_instant.elapsed().as_millis() as i64);
-                    iface.poll(now_smol, device, sockets);
 
                     let state_c = Arc::clone(state);
                     let telemetry_c = Arc::clone(telemetry);
@@ -637,7 +667,17 @@ fn pump_tcp_sessions(
                     Err(_) => break,
                 }
             }
-            if !sock.may_recv() && sock.recv_queue() == 0 {
+            // Only treat the client's send side as closed once TCP actually enters a FIN/closed state,
+            // NOT while still in SynReceived during the 3-way handshake!
+            let peer_closed = matches!(
+                sock.state(),
+                TcpState::CloseWait
+                    | TcpState::LastAck
+                    | TcpState::Closing
+                    | TcpState::TimeWait
+                    | TcpState::Closed
+            );
+            if peer_closed && sock.recv_queue() == 0 {
                 session.to_proxy_tx = None;
             }
         }
@@ -681,7 +721,10 @@ fn pump_tcp_sessions(
             }
         }
 
-        if session.close_after_drain && session.pending_to_app.is_empty() && sock.is_open() {
+        if session.close_after_drain
+            && session.pending_to_app.is_empty()
+            && matches!(sock.state(), TcpState::Established | TcpState::CloseWait)
+        {
             sock.close();
         }
     }
@@ -792,7 +835,18 @@ async fn run_tcp_relay(
     {
         Ok(s) => s,
         Err(err) => {
-            log::debug!("Outbound TCP connect to {display_host}:{} failed: {err}", dst_addr.port());
+            log::warn!(
+                "Outbound TCP connect to {display_host}:{} failed: {err}",
+                dst_addr.port()
+            );
+            telemetry.push_log(
+                "TCP",
+                display_host,
+                dst_addr.ip().to_string(),
+                dst_addr.port(),
+                RuleAction::Block,
+                format!("Ошибка: {err}"),
+            );
             let _ = to_tun_tx.send(ProxyToTun::Abort).await;
             wake_notify.notify_one();
             return;
@@ -1031,5 +1085,349 @@ async fn run_udp_flow(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{
+        DnsConfig, ProxyConfig, ProxyProtocol, RoutingConfig, RoutingRuleConfig, RuleMatchType,
+    };
+    use crate::proxy::socket::NoopSocketProtector;
+    use smoltcp::wire::IpEndpoint;
+    use tokio::net::TcpListener;
+
+    struct SocketPairClientDevice {
+        fd: RawFd,
+        rx_buf: Vec<u8>,
+    }
+
+    impl SocketPairClientDevice {
+        fn new(fd: RawFd) -> Self {
+            Self {
+                fd,
+                rx_buf: vec![0u8; 4096],
+            }
+        }
+    }
+
+    struct ClientRxToken(Vec<u8>);
+    impl RxToken for ClientRxToken {
+        fn consume<R, F>(mut self, f: F) -> R
+        where
+            F: FnOnce(&mut [u8]) -> R,
+        {
+            f(&mut self.0)
+        }
+    }
+
+    struct ClientTxToken {
+        fd: RawFd,
+    }
+    impl TxToken for ClientTxToken {
+        fn consume<R, F>(self, len: usize, f: F) -> R
+        where
+            F: FnOnce(&mut [u8]) -> R,
+        {
+            let mut buf = vec![0u8; len];
+            let res = f(&mut buf);
+            let _ = write_tun_packet(self.fd, &buf);
+            res
+        }
+    }
+
+    impl Device for SocketPairClientDevice {
+        type RxToken<'a>
+            = ClientRxToken
+        where
+            Self: 'a;
+        type TxToken<'a>
+            = ClientTxToken
+        where
+            Self: 'a;
+
+        fn receive(
+            &mut self,
+            _timestamp: SmolInstant,
+        ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+            match read_tun_packet(self.fd, &mut self.rx_buf) {
+                Ok(n) if n > 0 => Some((
+                    ClientRxToken(self.rx_buf[..n].to_vec()),
+                    ClientTxToken { fd: self.fd },
+                )),
+                _ => None,
+            }
+        }
+
+        fn transmit(&mut self, _timestamp: SmolInstant) -> Option<Self::TxToken<'_>> {
+            Some(ClientTxToken { fd: self.fd })
+        }
+
+        fn capabilities(&self) -> DeviceCapabilities {
+            let mut caps = DeviceCapabilities::default();
+            caps.medium = Medium::Ip;
+            caps.max_transmission_unit = 1500;
+            caps
+        }
+    }
+
+    async fn spawn_mock_socks5_redirect(target_addr: SocketAddr) -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let proxy_addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            while let Ok((mut client, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut greet = [0u8; 3];
+                    if client.read_exact(&mut greet).await.is_err() {
+                        return;
+                    }
+                    if client.write_all(&[0x05, 0x00]).await.is_err() {
+                        return;
+                    }
+                    let mut req_hdr = [0u8; 4];
+                    if client.read_exact(&mut req_hdr).await.is_err() {
+                        return;
+                    }
+                    match req_hdr[3] {
+                        0x01 => {
+                            let mut rest = [0u8; 6];
+                            if client.read_exact(&mut rest).await.is_err() {
+                                return;
+                            }
+                        }
+                        0x03 => {
+                            let mut len = [0u8; 1];
+                            if client.read_exact(&mut len).await.is_err() {
+                                return;
+                            }
+                            let mut rest = vec![0u8; len[0] as usize + 2];
+                            if client.read_exact(&mut rest).await.is_err() {
+                                return;
+                            }
+                        }
+                        _ => return,
+                    }
+                    if client
+                        .write_all(&[0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x1F, 0x90])
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    if let Ok(mut upstream) = tokio::net::TcpStream::connect(target_addr).await {
+                        let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+                    }
+                });
+            }
+        });
+
+        proxy_addr
+    }
+
+    fn drive_client_tcp_exchange(
+        client_fd: RawFd,
+        dst_ip: Ipv4Address,
+        dst_port: u16,
+        src_port: u16,
+        payload_to_send: &[u8],
+        expect_reply: bool,
+    ) -> (Vec<u8>, bool) {
+        let mut device = SocketPairClientDevice::new(client_fd);
+        let start = Instant::now();
+        let mut cfg = SmolConfig::new(HardwareAddress::Ip);
+        cfg.random_seed = 0x1122_3344_5566_7788;
+        let mut iface = Interface::new(cfg, &mut device, SmolInstant::from_millis(0));
+        iface.update_ip_addrs(|addrs| {
+            let _ = addrs.push(IpCidr::new(IpAddress::v4(10, 10, 0, 2), 24));
+        });
+        let _ = iface
+            .routes_mut()
+            .add_default_ipv4_route(Ipv4Address::new(10, 10, 0, 1));
+
+        let mut sockets = SocketSet::new(vec![]);
+        let rx_buf = TcpSocketBuffer::new(vec![0u8; 64 * 1024]);
+        let tx_buf = TcpSocketBuffer::new(vec![0u8; 64 * 1024]);
+        let sock = TcpSocket::new(rx_buf, tx_buf);
+        let handle = sockets.add(sock);
+
+        let remote = IpEndpoint::new(IpAddress::Ipv4(dst_ip), dst_port);
+        sockets
+            .get_mut::<TcpSocket>(handle)
+            .connect(iface.context(), remote, src_port)
+            .unwrap();
+
+        let mut sent = false;
+        let mut received = Vec::new();
+        let mut reset_or_closed = false;
+
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline {
+            let now = SmolInstant::from_millis(start.elapsed().as_millis() as i64);
+            iface.poll(now, &mut device, &mut sockets);
+
+            let sock = sockets.get_mut::<TcpSocket>(handle);
+            if !sent && sock.can_send() && !payload_to_send.is_empty() {
+                if let Ok(n) = sock.send_slice(payload_to_send) {
+                    if n == payload_to_send.len() {
+                        sent = true;
+                    }
+                }
+            }
+            if sock.can_recv() {
+                let _ = sock.recv(|data| {
+                    received.extend_from_slice(data);
+                    (data.len(), ())
+                });
+                if expect_reply && !received.is_empty() && !sock.may_recv() {
+                    break;
+                }
+            }
+            if matches!(sock.state(), TcpState::Closed | TcpState::TimeWait) {
+                reset_or_closed = true;
+                break;
+            }
+            if expect_reply && !received.is_empty() && sock.state() == TcpState::CloseWait {
+                sock.close();
+            }
+
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        (received, reset_or_closed)
+    }
+
+    #[test]
+    fn tun_engine_relays_http_and_binary_tcp_through_socks5_and_blocks_rules() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+
+        let (proxy_addr, _server_handle) = rt.block_on(async {
+            let target_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let target_addr = target_listener.local_addr().unwrap();
+
+            let server_handle = tokio::spawn(async move {
+                while let Ok((mut conn, _)) = target_listener.accept().await {
+                    tokio::spawn(async move {
+                        let mut buf = vec![0u8; 4096];
+                        let Ok(n) = conn.read(&mut buf).await else {
+                            return;
+                        };
+                        if buf[..n].starts_with(b"GET ") {
+                            let _ = conn
+                                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\n\r\nKESTREL")
+                                .await;
+                        } else {
+                            let _ = conn.write_all(&buf[..n]).await;
+                        }
+                        let _ = conn.shutdown().await;
+                    });
+                }
+            });
+
+            let proxy_addr = spawn_mock_socks5_redirect(target_addr).await;
+            (proxy_addr, server_handle)
+        });
+
+        let mut fds = [0i32; 2];
+        let rc = unsafe { libc::socketpair(libc::AF_UNIX, libc::SOCK_DGRAM, 0, fds.as_mut_ptr()) };
+        assert_eq!(rc, 0);
+        let tun_fd = fds[0];
+        let client_fd = fds[1];
+        let flags = unsafe { libc::fcntl(client_fd, libc::F_GETFL) };
+        assert_eq!(
+            unsafe { libc::fcntl(client_fd, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+            0
+        );
+
+        let config = CoreConfig {
+            proxy: Some(ProxyConfig {
+                protocol: ProxyProtocol::Socks5,
+                host: "127.0.0.1".to_string(),
+                port: proxy_addr.port(),
+                username: None,
+                password: None,
+            }),
+            dns: DnsConfig::default(),
+            routing: RoutingConfig {
+                default_action: RuleAction::Proxy,
+                bypass_lan: true,
+                rules: vec![RoutingRuleConfig {
+                    id: "blk".to_string(),
+                    name: "Block tracker".to_string(),
+                    match_type: RuleMatchType::DomainSuffix,
+                    value: "blocked.test".to_string(),
+                    action: RuleAction::Block,
+                    enabled: true,
+                }],
+            },
+            mtu: 1500,
+        };
+
+        let engine = RunningEngine::start(tun_fd, config, Arc::new(NoopSocketProtector)).unwrap();
+
+        // 1. HTTP GET via TUN -> smoltcp -> SOCKS5 -> target server
+        let http_req = b"GET / HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n";
+        let (http_resp, _) = drive_client_tcp_exchange(
+            client_fd,
+            Ipv4Address::new(93, 184, 216, 34),
+            80,
+            41001,
+            http_req,
+            true,
+        );
+        let http_resp_str = String::from_utf8_lossy(&http_resp);
+        assert!(
+            http_resp_str.ends_with("KESTREL"),
+            "Unexpected HTTP response over TUN: {http_resp_str}"
+        );
+
+        // 2. Binary MTProto-like payload (non-HTTP/non-TLS) echoed back via SOCKS5
+        let binary_payload = b"\xEF\x01\x02\x03KESTREL_BINARY_FRAME\x99\x00";
+        let (bin_resp, _) = drive_client_tcp_exchange(
+            client_fd,
+            Ipv4Address::new(149, 154, 167, 51),
+            443,
+            41002,
+            binary_payload,
+            true,
+        );
+        assert_eq!(bin_resp.as_slice(), binary_payload);
+
+        // 3. BLOCK rule immediately resets/closes the client TCP socket
+        let blocked_http = b"GET / HTTP/1.1\r\nHost: ads.blocked.test\r\n\r\n";
+        let (blocked_resp, blocked_closed) = drive_client_tcp_exchange(
+            client_fd,
+            Ipv4Address::new(8, 8, 8, 8),
+            80,
+            41003,
+            blocked_http,
+            false,
+        );
+        assert!(blocked_resp.is_empty());
+        assert!(blocked_closed);
+
+        let stats_json = engine.stats_json();
+        let stats: crate::stats::TrafficStats = serde_json::from_str(&stats_json).unwrap();
+        assert!(stats.tx_bytes > 0);
+        assert!(stats.rx_bytes > 0);
+
+        let logs_json = engine.poll_logs_json(0, 50);
+        let logs: Vec<crate::stats::ConnectionLogEntry> = serde_json::from_str(&logs_json).unwrap();
+        assert!(logs
+            .iter()
+            .any(|l| l.host == "example.com" && l.action == RuleAction::Proxy));
+        assert!(logs
+            .iter()
+            .any(|l| l.host == "ads.blocked.test" && l.action == RuleAction::Block));
+
+        unsafe {
+            libc::close(client_fd);
+        }
+        engine.stop();
     }
 }

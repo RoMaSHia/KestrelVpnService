@@ -113,6 +113,7 @@ fun DashboardScreen(
     onSaveDns: (String, String, Boolean) -> Unit,
     onChangeTheme: (ThemeMode) -> Unit,
     onChangeDynamicColor: (Boolean) -> Unit,
+    onToggleIpv6: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -365,6 +366,7 @@ fun DashboardScreen(
             uiState = uiState,
             onChangeTheme = onChangeTheme,
             onChangeDynamicColor = onChangeDynamicColor,
+            onToggleIpv6 = onToggleIpv6,
             onSaveDns = onSaveDns,
             onDismiss = { showSettingsSheet = false },
         )
@@ -906,6 +908,7 @@ private fun AppearanceAndDnsSheet(
     uiState: KestrelUiState,
     onChangeTheme: (ThemeMode) -> Unit,
     onChangeDynamicColor: (Boolean) -> Unit,
+    onToggleIpv6: (Boolean) -> Unit,
     onSaveDns: (String, String, Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1029,6 +1032,28 @@ private fun AppearanceAndDnsSheet(
                 Switch(
                     checked = routeDns,
                     onCheckedChange = { routeDns = it },
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Маршрутизация IPv6",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        text = "По умолчанию выключено, чтобы IPv4-прокси не обрывали Telegram и сайты с IPv6.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = uiState.settings.enableIpv6,
+                    onCheckedChange = onToggleIpv6,
                 )
             }
 

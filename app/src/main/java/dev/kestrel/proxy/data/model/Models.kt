@@ -96,6 +96,7 @@ data class AppSettings(
     val routeDns: Boolean = true,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val dynamicColor: Boolean = true,
+    val enableIpv6: Boolean = false,
     val mtu: Int = 1500,
 )
 

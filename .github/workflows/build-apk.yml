@@ -32,9 +32,10 @@ jobs:
 
       - name: Install Android SDK platforms, build-tools & NDK
         run: |
+          SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           yes | sdkmanager --licenses > /dev/null || true
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "build-tools;34.0.0" "ndk;27.2.12479018"
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=${SDK_ROOT}/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -53,12 +54,13 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
 
       - name: Decode optional release keystore
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > "${RUNNER_TEMP}/release.keystore"
-          echo "KEYSTORE_PATH=${RUNNER_TEMP}/release.keystore" >> "$GITHUB_ENV"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "${RUNNER_TEMP}/release.keystore"
+            echo "KEYSTORE_PATH=${RUNNER_TEMP}/release.keystore" >> "$GITHUB_ENV"
+          fi
 
       - name: Run Rust unit tests
         run: cargo test --manifest-path rust-core/Cargo.toml
@@ -75,10 +77,11 @@ jobs:
 
       - name: Package and verify APKs
         run: |
+          SDK_ROOT="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/Kestrel-universal.apk
           cp app/build/outputs/apk/debug/app-debug.apk dist/Kestrel-debug.apk
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify dist/Kestrel-universal.apk
+          "${SDK_ROOT}/build-tools/35.0.0/apksigner" verify dist/Kestrel-universal.apk
           unzip -l dist/Kestrel-universal.apk | grep libproxy_core.so
           unzip -l dist/Kestrel-debug.apk | grep libproxy_core.so
 
@@ -92,6 +95,8 @@ jobs:
       - name: Publish GitHub Release on tag
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           make_latest: true
           generate_release_notes: true

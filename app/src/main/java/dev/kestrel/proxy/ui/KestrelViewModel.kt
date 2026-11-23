@@ -408,6 +408,15 @@ class KestrelViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun setEnableIpv6(enabled: Boolean) {
+        viewModelScope.launch {
+            repo.updateSettings { it.copy(enableIpv6 = enabled) }
+            if (VpnStateHolder.status.value == VpnStatus.CONNECTED) {
+                KestrelVpnService.restart(getApplication())
+            }
+        }
+    }
+
     private data class VpnBundle(
         val status: VpnStatus,
         val error: String?,

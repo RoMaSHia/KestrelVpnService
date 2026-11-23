@@ -399,10 +399,24 @@ pub async fn forward_dns_query(
         },
         RuleAction::Proxy => match send_tcp_dns_via_proxy(query_packet, primary, cfg, protector).await {
             Ok(resp) => Ok(resp),
-            Err(_) if fallback != primary => {
-                send_tcp_dns_via_proxy(query_packet, fallback, cfg, protector).await
+            Err(err) => {
+                log::debug!("Proxy DNS-over-TCP to {primary} failed ({err}), trying fallback");
+                if fallback != primary {
+                    if let Ok(resp) =
+                        send_tcp_dns_via_proxy(query_packet, fallback, cfg, protector).await
+                    {
+                        return Ok(resp);
+                    }
+                }
+                // Fallback to protected direct UDP DNS when the proxy blocks outbound port 53
+                match send_udp_dns(query_packet, primary, protector).await {
+                    Ok(resp) => Ok(resp),
+                    Err(_) if fallback != primary => {
+                        send_udp_dns(query_packet, fallback, protector).await
+                    }
+                    Err(udp_err) => Err(udp_err),
+                }
             }
-            Err(err) => Err(err),
         },
         RuleAction::Block => unreachable!(),
     }

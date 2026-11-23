@@ -25,12 +25,11 @@ pub async fn connect_http_proxy(
         "CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Connection: Keep-Alive\r\n"
     );
 
-    if let Some(username) = proxy.username.as_deref() {
-        let password = proxy.password.as_deref().unwrap_or("");
-        if !username.is_empty() || !password.is_empty() {
-            let token = STANDARD.encode(format!("{username}:{password}"));
-            request.push_str(&format!("Proxy-Authorization: Basic {token}\r\n"));
-        }
+    let username = proxy.username.as_deref().unwrap_or("");
+    let password = proxy.password.as_deref().unwrap_or("");
+    if !username.is_empty() || !password.is_empty() {
+        let token = STANDARD.encode(format!("{username}:{password}"));
+        request.push_str(&format!("Proxy-Authorization: Basic {token}\r\n"));
     }
     request.push_str("\r\n");
 
