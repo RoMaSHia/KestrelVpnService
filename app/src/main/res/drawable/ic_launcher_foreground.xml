@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Stylized Kestrel routing arrow / wing silhouette inside safe zone -->
+    <path
+        android:fillColor="#5CDAC5"
+        android:pathData="M30,66L54,28L78,66L66,66L54,47L42,66Z" />
+    <path
+        android:fillColor="#B2F2E6"
+        android:pathData="M43,72L54,54L65,72L54,67Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,75m-4,0a4,4 0 1,0 8,0a4,4 0 1,0 -8,0" />
+</vector>

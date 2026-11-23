@@ -1,0 +1,19 @@
+# Gradle & build outputs
+.gradle/
+.kotlin/
+build/
+app/build/
+local.properties
+
+# Rust build artifacts & generated JNI libraries
+rust-core/target/
+app/src/main/jniLibs/
+
+# IDE & OS metadata
+.idea/
+*.iml
+.DS_Store
+
+# Signing keys
+*.jks
+*.keystore
