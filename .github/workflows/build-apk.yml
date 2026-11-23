@@ -17,9 +17,6 @@ jobs:
     name: Test & Build APK (arm64-v8a, x86_64)
     runs-on: ubuntu-24.04
 
-    env:
-      ANDROID_NDK_HOME: ${{ env.ANDROID_SDK_ROOT }}/ndk/27.2.12479018
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,16 +29,12 @@ jobs:
 
       - name: Set up Android SDK & NDK
         uses: android-actions/setup-android@v3
-        with:
-          packages: >
-            platform-tools
-            platforms;android-35
-            build-tools;35.0.0
-            build-tools;34.0.0
-            ndk;27.2.12479018
 
-      - name: Expose ANDROID_NDK_HOME
-        run: echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Install Android SDK platforms, build-tools & NDK
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "build-tools;34.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/27.2.12479018" >> "$GITHUB_ENV"
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -59,6 +52,14 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Decode optional release keystore
+        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "${RUNNER_TEMP}/release.keystore"
+          echo "KEYSTORE_PATH=${RUNNER_TEMP}/release.keystore" >> "$GITHUB_ENV"
+
       - name: Run Rust unit tests
         run: cargo test --manifest-path rust-core/Cargo.toml
 
@@ -66,27 +67,34 @@ jobs:
         run: ./gradlew testDebugUnitTest --no-daemon
 
       - name: Build Debug & Release APKs
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: ./gradlew assembleDebug assembleRelease --no-daemon --stacktrace
 
-      - name: Verify native libraries in APKs
+      - name: Package and verify APKs
         run: |
-          unzip -l app/build/outputs/apk/debug/app-debug.apk | grep libproxy_core.so
-          unzip -l app/build/outputs/apk/release/app-release-unsigned.apk | grep libproxy_core.so
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/Kestrel-universal.apk
+          cp app/build/outputs/apk/debug/app-debug.apk dist/Kestrel-debug.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify dist/Kestrel-universal.apk
+          unzip -l dist/Kestrel-universal.apk | grep libproxy_core.so
+          unzip -l dist/Kestrel-debug.apk | grep libproxy_core.so
 
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
           name: kestrel-apks
-          path: |
-            app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/apk/release/*.apk
+          path: dist/*.apk
           if-no-files-found: error
 
       - name: Publish GitHub Release on tag
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          make_latest: true
           generate_release_notes: true
           files: |
-            app/build/outputs/apk/debug/app-debug.apk
-            app/build/outputs/apk/release/*.apk
+            dist/Kestrel-universal.apk
+            dist/Kestrel-debug.apk

@@ -1,6 +1,21 @@
+<div align="center">
+
 # Kestrel
 
-**Kestrel** — open-source прокси-клиент для Android (SDK 26–35) с высокопроизводительным нативным ядром на Rust (`tokio` + `smoltcp`) и интерфейсом на Kotlin + Jetpack Compose (Material 3 / Material You).
+**Open-source прокси-клиент для Android (SDK 26–35)** с высокопроизводительным ядром на **Rust** (`tokio` + `smoltcp`) и интерфейсом на **Kotlin / Jetpack Compose** (Material 3 / Material You).
+
+<br>
+
+[![Скачать Kestrel APK](https://img.shields.io/badge/%D0%A1%D0%BA%D0%B0%D1%87%D0%B0%D1%82%D1%8C_APK-Kestrel_Android-006A5E?style=for-the-badge&logo=android&logoColor=white)](https://github.com/RoMaSHia/KestrelVpnService/releases/latest/download/Kestrel-universal.apk)
+
+[![Все релизы](https://img.shields.io/github/v/release/RoMaSHia/KestrelVpnService?label=%D0%92%D0%B5%D1%80%D1%81%D0%B8%D1%8F&style=flat-square&color=006A5E)](https://github.com/RoMaSHia/KestrelVpnService/releases)
+[![Сборка APK](https://img.shields.io/github/actions/workflow/status/RoMaSHia/KestrelVpnService/build-apk.yml?label=Build%20APK&style=flat-square)](https://github.com/RoMaSHia/KestrelVpnService/actions)
+[![Лицензия](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
+
+> **Как установить:** нажмите кнопку **«Скачать APK»** — браузер сразу загрузит `Kestrel-universal.apk` (Android 8.0+, `arm64-v8a` и `x86_64`). Откройте файл на телефоне и при запросе разрешите установку.  
+> [Все версии (Releases)](https://github.com/RoMaSHia/KestrelVpnService/releases) · [Сборки GitHub Actions](https://github.com/RoMaSHia/KestrelVpnService/actions)
+
+</div>
 
 ---
 
@@ -92,7 +107,7 @@ cargo test --manifest-path rust-core/Cargo.toml
 
 Собранные APK будут находиться в:
 - `app/build/outputs/apk/debug/app-debug.apk`
-- `app/build/outputs/apk/release/app-release-unsigned.apk`
+- `app/build/outputs/apk/release/app-release.apk`
 
 ---
 
