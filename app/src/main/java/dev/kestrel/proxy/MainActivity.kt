@@ -39,6 +39,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         if (intent?.getBooleanExtra(KestrelTileService.EXTRA_AUTO_CONNECT, false) == true) {
+            intent?.removeExtra(KestrelTileService.EXTRA_AUTO_CONNECT)
             requestConnectWithPermissions()
         }
 
@@ -52,7 +53,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
         if (intent.getBooleanExtra(KestrelTileService.EXTRA_AUTO_CONNECT, false)) {
+            intent.removeExtra(KestrelTileService.EXTRA_AUTO_CONNECT)
             requestConnectWithPermissions()
         }
     }
